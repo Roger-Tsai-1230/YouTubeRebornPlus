@@ -33,10 +33,15 @@ jobs:
       - name: Download iOS SDK
         run: |
           mkdir -p ~/theos/sdks
-          # 使用更穩定的 SDK 來源並直接解壓
-          curl -L "https://github.com/theos/sdks/archive/master.tar.gz" | tar -xz --strip-components=1 -C ~/theos/sdks
-          # 檢查 SDK 是否存在
-          ls ~/theos/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk || echo "SDK not found, check version input"
+          # 直接下載特定的 SDK 壓縮檔，並解除嵌套資料夾
+          curl -L "https://github.com/theos/sdks/archive/master.tar.gz" -o sdks.tar.gz
+          tar -xzf sdks.tar.gz --strip-components=1 -C ~/theos/sdks
+          
+          # 自動修正：將所有資料夾移動到 ~/theos/sdks 根目錄下（防止路徑躲在 sdks-master 裡）
+          # 同時列出內容以供 Debug
+          echo "Checking SDKs location:"
+          ls -d ~/theos/sdks/*/ || echo "No subdirectories found"
+          ls ~/theos/sdks/
 
       - name: Patch Makefile for Dylib Build
         run: |
@@ -53,8 +58,17 @@ jobs:
       - name: Compile Tweak
         run: |
           export THEOS=~/theos
-          # 使用指定 SDK 進行編譯
-          make package FINALPACKAGE=1 SDKROOT=~/theos/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk
+          # 自動尋找系統中存在的 SDK 路徑，避免手動輸入錯誤
+          SDK_PATH=$(find ~/theos/sdks -name "iPhoneOS${{ inputs.sdk_version }}.sdk" -type d | head -n 1)
+          
+          if [ -z "$SDK_PATH" ]; then
+            echo "Error: SDK iPhoneOS${{ inputs.sdk_version }}.sdk not found!"
+            ls -R ~/theos/sdks
+            exit 1
+          fi
+          
+          echo "Using SDK at: $SDK_PATH"
+          make package FINALPACKAGE=1 SDKROOT="$SDK_PATH" THEOS_PACKAGE_SCHEME=rootless
 
       - name: Extract Dylib and Plist
         run: |
