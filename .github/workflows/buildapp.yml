@@ -1,7 +1,4 @@
-# Original idea by @ISnackable. Many thanks to him for handling the most hardest parts!
-# https://github.com/ISnackable/YTCubePlus/blob/main/.github/workflows/Build.yml
-
-name: Build and Release YouTubeRebornPlus
+name: Build YouTubeRebornPlus Dylib Only
 
 on:
   workflow_dispatch:
@@ -11,44 +8,10 @@ on:
         default: "17.5"
         required: true
         type: string
-      reborn_version:
-        description: "The version of YouTube Reborn"
-        default: "4.2.9"
-        required: true
-        type: string
-      decrypted_youtube_url:
-        description: "The direct URL to the decrypted YouTube ipa"
-        default: ""
-        required: false
-        type: string
-      bundle_id:
-        description: "Modify the bundle ID. Not recommended"
-        default: "com.google.ios.youtube"
-        required: true
-        type: string
-      app_name:
-        description: "Modify the name of the app on the Home Screen. Not recommended"
-        default: "YouTube"
-        required: true
-        type: string
-      create_release:
-        description: "Create a draft release"
-        default: true
-        required: false
-        type: boolean
-      upload_artifact:
-        description: "Upload Artifact"
-        default: true
-        required: false
-        type: boolean
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build YouTubeRebornPlus
+    name: Build Tweak Dylib
     runs-on: macos-14
     permissions:
       contents: write
@@ -63,9 +26,6 @@ jobs:
       - name: Install Dependencies
         run: brew install ldid dpkg make
 
-      - name: Set PATH environment variable
-        run: echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
-
       - name: Setup Theos
         uses: actions/checkout@v5
         with:
@@ -74,97 +34,46 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: SDK Caching
-        id: SDK
-        uses: actions/cache@v4.3.0
-        env:
-          cache-name: iOS-${{ inputs.sdk_version }}-SDK
-        with:
-          path: theos/sdks/
-          key: ${{ env.cache-name }}
-          restore-keys: ${{ env.cache-name }}
-
       - name: Download iOS SDK
-        if: steps.SDK.outputs.cache-hit != 'true'
         run: |
-          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks/
+          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
           cd sdks
           git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
           git checkout
-          mv *.sdk $THEOS/sdks
+          mv *.sdk ${{ github.workspace }}/theos/sdks
         env:
           THEOS: ${{ github.workspace }}/theos
 
-      - name: Setup Theos Jailed
-        uses: actions/checkout@v5
-        with:
-          repository: qnblackcat/theos-jailed
-          ref: master
-          path: theos-jailed
-          submodules: recursive
-
-      - name: Install Theos Jailed
-        run: |
-          ./theos-jailed/install
-        env:
-          THEOS: ${{ github.workspace }}/theos
-
-      - name: Prepare YouTube iPA
-        id: prepare_youtube
-        run: |
-          wget "$YOUTUBE_URL" --no-verbose -O main/YouTube.ipa
-          cd ${{ github.workspace }}/main
-          mv YouTube.ipa YouTube.zip
-          unzip -q YouTube.zip
-          youtube_version=$(defaults read "$(pwd)/Payload/YouTube.app/Info" CFBundleVersion)
-          echo "==> YouTube v$youtube_version downloaded!"
-          sed -i '' "17s#.*#YOUTUBE_VERSION = ${youtube_version}#g" Makefile
-          echo "youtube_version=${youtube_version}" >> $GITHUB_OUTPUT
-
-        env:
-          THEOS: ${{ github.workspace }}/theos
-          YOUTUBE_URL: ${{ inputs.decrypted_youtube_url }}
-
-      - name: Fix compiling & Build Package
-        id: build_package
+      - name: Build Tweak (Dylib & Deb)
+        id: build_tweak
         run: |
           cd ${{ github.workspace }}/main
-          sed -i '' "27s#.*#BUNDLE_ID = ${{ inputs.bundle_id }}#g" Makefile                          # Modify the bundle ID
-          sed -i '' "26s#.*#DISPLAY_NAME = ${{ inputs.app_name }}#g" Makefile                        # Modify the app name
-          sed -i '' "1s#.*#export TARGET = iphone:clang:${{ inputs.sdk_version }}:14.0#g" Makefile # Modify the SDK version
-          make package THEOS_PACKAGE_SCHEME=rootless IPA=Payload/YouTube.app FINALPACKAGE=1
-          echo "package=$(ls -t packages | head -n1)" >>$GITHUB_OUTPUT
-          echo -e "==> \033[1mSHASUM256: $(shasum -a 256 packages/*.ipa | cut -f1 -d' ')\033[0m"
-          echo -e "==> \033[1mBundle ID: ${{ inputs.bundle_id }}\033[0m"
-
+          export THEOS=${{ github.workspace }}/theos
+          # 修改 Makefile 移除 jailed 依賴，改為標準編譯
+          sed -i '' 's/include $(THEOS)\/makefiles\/common.mk/include $(THEOS)\/makefiles\/common.mk/g' Makefile
+          
+          # 核心編譯指令：只編譯插件不打包 iPA
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+          
+          # 尋找產出的 .deb 文件
+          DEB_NAME=$(ls packages/*.deb | head -n 1)
+          echo "deb_path=$DEB_NAME" >> $GITHUB_OUTPUT
         env:
           THEOS: ${{ github.workspace }}/theos
-          REBORN_VERSION: ${{ inputs.reborn_version }}
-          BUNDLE_ID: ${{ inputs.bundle_id }}
-          APP_NAME: ${{ inputs.app_name }}
 
-      - name: Upload Artifact
-        if: ${{ inputs.upload_artifact }}
-        uses: actions/upload-artifact@v4.6.2
-        env:
-          REBORN_VERSION: ${{ inputs.reborn_version }}
-          YOUTUBE_VERSION: ${{ steps.prepare_youtube.outputs.youtube_version }}
-        with:
-          name: YouTubeRebornPlus_${{ env.YOUTUBE_VERSION }}_${{ env.REBORN_VERSION }}
-          path: ${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}
-          if-no-files-found: error
+      - name: Extract Dylib from Deb
+        run: |
+          cd ${{ github.workspace }}/main
+          # 解壓 deb 提取 dylib
+          ar -x packages/*.deb
+          tar -xf data.tar.*
+          # 搜尋 dylib 並移動到方便上傳的位置
+          mkdir -p out_assets
+          find Library/MobileSubstrate/DynamicLibraries/ -name "*.dylib" -exec cp {} out_assets/ \;
+          find Library/MobileSubstrate/DynamicLibraries/ -name "*.plist" -exec cp {} out_assets/ \;
 
-      - name: Create Release
-        if: ${{ inputs.create_release }}
-        id: create_release
-        uses: softprops/action-gh-release@v2.4.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REBORN_VERSION: ${{ inputs.reborn_version }}
-          YOUTUBE_VERSION: ${{ steps.prepare_youtube.outputs.youtube_version }}
-          DRAFT: ${{ inputs.create_release }}
+      - name: Upload Dylib Artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ env.YOUTUBE_VERSION }}-${{ env.REBORN_VERSION }}-(${{ github.run_number }})
-          name: v${{ env.YOUTUBE_VERSION }}-${{ env.REBORN_VERSION }}-(${{ github.run_number }})
-          files: main/packages/*.ipa
-          draft: ${{ env.DRAFT }}
+          name: YouTubeRebornPlus-Dylib
+          path: main/out_assets/*
