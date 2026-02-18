@@ -45,14 +45,19 @@ jobs:
 
       - name: Patch Makefile for Dylib Build
         run: |
-          # 1. 將 jailed.mk 替換為 tweak.mk (核心修改)
+          cd ${{ github.workspace }}
+          # 1. 將 jailed.mk 替換為 tweak.mk
           sed -i '' 's/jailed.mk/tweak.mk/g' Makefile
           
-          # 2. 註釋掉任何強制要求 IPA 或封裝 IPA 的行
-          sed -i '' 's/^[^#]*IPA *=/#&/' Makefile
-          sed -i '' 's/^[^#]*INSTALL_TARGET_PROCESSES *=/#&/' Makefile
+          # 2. 強制刪除 Makefile 中可能存在的 TARGET 或 SDK 版本宣告
+          # 這樣 Theos 就會完全聽從我們在命令列傳入的 SDKROOT
+          sed -i '' '/^TARGET =/d' Makefile
+          sed -i '' '/^SYSROOT =/d' Makefile
           
-          # 3. 確保輸出為 rootless 格式以利於現代設備使用
+          # 3. 註釋掉強制要求 IPA 的行
+          sed -i '' 's/^[^#]*IPA *=/#&/' Makefile
+          
+          # 4. 確保輸出為 rootless
           echo "THEOS_PACKAGE_SCHEME = rootless" >> Makefile
 
       - name: Compile Tweak
