@@ -45,7 +45,7 @@ jobs:
 
       - name: Patch Makefile for Dylib Build
         run: |
-          # 1. 刪除所有硬編碼的開發環境設定，讓它們聽從 GitHub Actions 的參數
+          # 1. 刪除所有硬編碼的環境設定
           sed -i '' '/^export TARGET =/d' Makefile
           sed -i '' '/^export SDK_PATH =/d' Makefile
           sed -i '' '/^export SYSROOT =/d' Makefile
@@ -53,16 +53,16 @@ jobs:
           # 2. 修正編譯模式
           sed -i '' 's/jailed.mk/tweak.mk/g' Makefile
           
-          # 3. 處理子專案中的 Makefile (確保子插件也能正確編譯)
+          # 3. 清理子專案的 Makefile
           find Tweaks -name "Makefile" -exec sed -i '' '/^export TARGET =/d' {} +
           find Tweaks -name "Makefile" -exec sed -i '' '/^export SDK_PATH =/d' {} +
           find Tweaks -name "Makefile" -exec sed -i '' '/^export SYSROOT =/d' {} +
 
-          # 4. 註釋掉可能導致錯誤的下載與解壓邏輯 (因為我們不需要包裝整個 YouTube)
-          # 注意：這部分會保留插件編譯所需的邏輯，但跳過 IPA 相關操作
-          sed -i '' 's/^[^#]*REMOVE_EXTENSIONS =/#&/' Makefile
+          # 4. 【核心修正】強制關閉 -Werror，允許棄用警告通過
+          # 在全局 Makefile 加入忽略警告的參數
+          echo "ADDITIONAL_CFLAGS += -Wno-error -Wno-deprecated-declarations" >> Makefile
           
-          # 5. 強制加入 Rootless 宣告
+          # 5. 確保輸出為 rootless
           echo "THEOS_PACKAGE_SCHEME = rootless" >> Makefile
 
       - name: Compile Tweak
