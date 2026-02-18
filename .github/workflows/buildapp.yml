@@ -1,81 +1,81 @@
-name: Build YouTubeRebornPlus Dylib Only
+name: Build YouTubeRebornPlus Dylib
 
 on:
   workflow_dispatch:
     inputs:
       sdk_version:
-        description: "iOS SDK version to be used during build"
-        default: "17.5"
+        description: "iOS SDK version"
+        default: "16.5"
         required: true
         type: string
 
 jobs:
   build:
-    name: Build Tweak Dylib
-    runs-on: macos-14
+    name: Build Tweak
+    runs-on: macos-latest
     permissions:
       contents: write
 
     steps:
       - name: Checkout Main
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
-          path: main
           submodules: recursive
 
       - name: Install Dependencies
         run: brew install ldid dpkg make
 
       - name: Setup Theos
-        uses: actions/checkout@v5
-        with:
-          repository: theos/theos
-          ref: master
-          path: theos
-          submodules: recursive
+        run: |
+          git clone --recursive https://github.com/theos/theos.git ~/theos
+          echo "THEOS=~/theos" >> $GITHUB_ENV
 
       - name: Download iOS SDK
         run: |
-          # 建立目標資料夾
-          mkdir -p ${{ github.workspace }}/theos/sdks
-          # 直接下載單一 SDK 到指定路徑 (不使用 git clone 以免路徑混亂)
-          curl -L https://github.com/theos/sdks/raw/master/iPhoneOS${{ inputs.sdk_version }}.sdk.tar.xz -o sdk.tar.xz
-          tar -xf sdk.tar.xz -C ${{ github.workspace }}/theos/sdks/
-          # 確認 SDK 是否真的在那裡 (Debug 用)
-          ls -R ${{ github.workspace }}/theos/sdks/
+          mkdir -p ~/theos/sdks
+          # 使用更穩定的 SDK 來源並直接解壓
+          curl -L "https://github.com/theos/sdks/archive/master.tar.gz" | tar -xz --strip-components=1 -C ~/theos/sdks
+          # 檢查 SDK 是否存在
+          ls ~/theos/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk || echo "SDK not found, check version input"
 
-      - name: Build Tweak (Dylib & Deb)
-        id: build_tweak
+      - name: Patch Makefile for Dylib Build
         run: |
-          cd ${{ github.workspace }}/main
-          export THEOS=${{ github.workspace }}/theos
-          
-          # 修正 Makefile：將 jailed 轉為 tweak 模式
+          # 1. 將 jailed.mk 替換為 tweak.mk (核心修改)
           sed -i '' 's/jailed.mk/tweak.mk/g' Makefile
           
-          # 編譯指令，並明確指定 SDK 路徑
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless \
-            SDKROOT=${{ github.workspace }}/theos/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk
+          # 2. 註釋掉任何強制要求 IPA 或封裝 IPA 的行
+          sed -i '' 's/^[^#]*IPA *=/#&/' Makefile
+          sed -i '' 's/^[^#]*INSTALL_TARGET_PROCESSES *=/#&/' Makefile
           
-          # 取得產出的 deb 檔名
-          DEB_NAME=$(ls packages/*.deb | head -n 1)
-          echo "deb_path=$DEB_NAME" >> $GITHUB_OUTPUT
-        env:
-          THEOS: ${{ github.workspace }}/theos
+          # 3. 確保輸出為 rootless 格式以利於現代設備使用
+          echo "THEOS_PACKAGE_SCHEME = rootless" >> Makefile
 
-      - name: Extract Dylib from Deb
+      - name: Compile Tweak
         run: |
-          cd ${{ github.workspace }}/main
-          # 解壓 deb 提取 dylib
-          ar -x packages/*.deb
-          tar -xf data.tar.*
-          # 搜尋 dylib 並移動到方便上傳的位置
-          mkdir -p out_assets
-          find Library/MobileSubstrate/DynamicLibraries/ -name "*.dylib" -exec cp {} out_assets/ \;
-          find Library/MobileSubstrate/DynamicLibraries/ -name "*.plist" -exec cp {} out_assets/ \;
+          export THEOS=~/theos
+          # 使用指定 SDK 進行編譯
+          make package FINALPACKAGE=1 SDKROOT=~/theos/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk
 
-      - name: Upload Dylib Artifact
+      - name: Extract Dylib and Plist
+        run: |
+          # 建立輸出目錄
+          mkdir -p ./output_assets
+          
+          # 找到編譯出的 .deb 文件並解壓
+          DEB_FILE=$(find packages -name "*.deb" | head -n 1)
+          if [ -z "$DEB_FILE" ]; then echo "No deb found!"; exit 1; fi
+          
+          dpkg-deb -x "$DEB_FILE" ./temp_deb
+          
+          # 提取 dylib 和 plist
+          find ./temp_deb -name "*.dylib" -exec cp {} ./output_assets/ \;
+          find ./temp_deb -name "*.plist" -exec cp {} ./output_assets/ \;
+          
+          echo "Extracted files:"
+          ls ./output_assets/
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: YouTubeRebornPlus-Dylib
-          path: main/out_assets/*
+          name: YouTubeRebornPlus-Dylib-Files
+          path: ./output_assets/*
