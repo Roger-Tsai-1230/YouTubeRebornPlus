@@ -36,25 +36,28 @@ jobs:
 
       - name: Download iOS SDK
         run: |
-          git clone --quiet --depth=1 https://github.com/theos/sdks.git
+          # 建立目標資料夾
           mkdir -p ${{ github.workspace }}/theos/sdks
-          # 直接移動特定的 SDK 資料夾，避免使用萬用字元造成匹配失敗
-          mv sdks/iPhoneOS${{ inputs.sdk_version }}.sdk ${{ github.workspace }}/theos/sdks/
-        env:
-          THEOS: ${{ github.workspace }}/theos
+          # 直接下載單一 SDK 到指定路徑 (不使用 git clone 以免路徑混亂)
+          curl -L https://github.com/theos/sdks/raw/master/iPhoneOS${{ inputs.sdk_version }}.sdk.tar.xz -o sdk.tar.xz
+          tar -xf sdk.tar.xz -C ${{ github.workspace }}/theos/sdks/
+          # 確認 SDK 是否真的在那裡 (Debug 用)
+          ls -R ${{ github.workspace }}/theos/sdks/
 
       - name: Build Tweak (Dylib & Deb)
         id: build_tweak
         run: |
           cd ${{ github.workspace }}/main
           export THEOS=${{ github.workspace }}/theos
-          # 修改 Makefile 移除 jailed 依賴，改為標準編譯
-          sed -i '' 's/include $(THEOS)\/makefiles\/common.mk/include $(THEOS)\/makefiles\/common.mk/g' Makefile
           
-          # 核心編譯指令：只編譯插件不打包 iPA
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+          # 修正 Makefile：將 jailed 轉為 tweak 模式
+          sed -i '' 's/jailed.mk/tweak.mk/g' Makefile
           
-          # 尋找產出的 .deb 文件
+          # 編譯指令，並明確指定 SDK 路徑
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless \
+            SDKROOT=${{ github.workspace }}/theos/sdks/iPhoneOS${{ inputs.sdk_version }}.sdk
+          
+          # 取得產出的 deb 檔名
           DEB_NAME=$(ls packages/*.deb | head -n 1)
           echo "deb_path=$DEB_NAME" >> $GITHUB_OUTPUT
         env:
