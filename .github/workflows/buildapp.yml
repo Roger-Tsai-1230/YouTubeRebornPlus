@@ -45,35 +45,38 @@ jobs:
 
       - name: Patch Makefile for Dylib Build
         run: |
-          cd ${{ github.workspace }}
-          # 1. 將 jailed.mk 替換為 tweak.mk
+          # 1. 刪除所有硬編碼的開發環境設定，讓它們聽從 GitHub Actions 的參數
+          sed -i '' '/^export TARGET =/d' Makefile
+          sed -i '' '/^export SDK_PATH =/d' Makefile
+          sed -i '' '/^export SYSROOT =/d' Makefile
+          
+          # 2. 修正編譯模式
           sed -i '' 's/jailed.mk/tweak.mk/g' Makefile
           
-          # 2. 強制刪除 Makefile 中可能存在的 TARGET 或 SDK 版本宣告
-          # 這樣 Theos 就會完全聽從我們在命令列傳入的 SDKROOT
-          sed -i '' '/^TARGET =/d' Makefile
-          sed -i '' '/^SYSROOT =/d' Makefile
+          # 3. 處理子專案中的 Makefile (確保子插件也能正確編譯)
+          find Tweaks -name "Makefile" -exec sed -i '' '/^export TARGET =/d' {} +
+          find Tweaks -name "Makefile" -exec sed -i '' '/^export SDK_PATH =/d' {} +
+          find Tweaks -name "Makefile" -exec sed -i '' '/^export SYSROOT =/d' {} +
+
+          # 4. 註釋掉可能導致錯誤的下載與解壓邏輯 (因為我們不需要包裝整個 YouTube)
+          # 注意：這部分會保留插件編譯所需的邏輯，但跳過 IPA 相關操作
+          sed -i '' 's/^[^#]*REMOVE_EXTENSIONS =/#&/' Makefile
           
-          # 3. 註釋掉強制要求 IPA 的行
-          sed -i '' 's/^[^#]*IPA *=/#&/' Makefile
-          
-          # 4. 確保輸出為 rootless
+          # 5. 強制加入 Rootless 宣告
           echo "THEOS_PACKAGE_SCHEME = rootless" >> Makefile
 
       - name: Compile Tweak
         run: |
           export THEOS=~/theos
-          # 自動尋找系統中存在的 SDK 路徑，避免手動輸入錯誤
           SDK_PATH=$(find ~/theos/sdks -name "iPhoneOS${{ inputs.sdk_version }}.sdk" -type d | head -n 1)
           
-          if [ -z "$SDK_PATH" ]; then
-            echo "Error: SDK iPhoneOS${{ inputs.sdk_version }}.sdk not found!"
-            ls -R ~/theos/sdks
-            exit 1
-          fi
-          
-          echo "Using SDK at: $SDK_PATH"
-          make package FINALPACKAGE=1 SDKROOT="$SDK_PATH" THEOS_PACKAGE_SCHEME=rootless
+          # 同時傳入多個覆蓋參數，確保子專案也同步
+          make package FINALPACKAGE=1 \
+            SDKROOT="$SDK_PATH" \
+            SYSROOT="$SDK_PATH" \
+            TARGET=iphone:clang:${{ inputs.sdk_version }}:14.0 \
+            THEOS_PACKAGE_SCHEME=rootless \
+            FOR_RELEASE=1
 
       - name: Extract Dylib and Plist
         run: |
