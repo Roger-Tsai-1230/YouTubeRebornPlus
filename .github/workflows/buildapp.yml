@@ -36,11 +36,10 @@ jobs:
 
       - name: Download iOS SDK
         run: |
-          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
-          cd sdks
-          git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
-          git checkout
-          mv *.sdk ${{ github.workspace }}/theos/sdks
+          git clone --quiet --depth=1 https://github.com/theos/sdks.git
+          mkdir -p ${{ github.workspace }}/theos/sdks
+          # 直接移動特定的 SDK 資料夾，避免使用萬用字元造成匹配失敗
+          mv sdks/iPhoneOS${{ inputs.sdk_version }}.sdk ${{ github.workspace }}/theos/sdks/
         env:
           THEOS: ${{ github.workspace }}/theos
 
